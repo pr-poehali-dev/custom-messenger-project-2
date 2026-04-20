@@ -129,15 +129,25 @@ export default function Index() {
 
       {/* Sidebar */}
       <aside className="w-80 flex-shrink-0 flex flex-col glass border-r border-white/5 relative z-10">
-        <div className="p-5 flex items-center justify-between">
-          <h1 className="font-display font-black text-2xl gradient-text tracking-tight">Поток</h1>
-          <div className="flex gap-2">
-            <button className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
-              <Icon name="Plus" size={16} className="text-white/70" />
-            </button>
-            <button className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
-              <Icon name="Settings" size={16} className="text-white/70" />
-            </button>
+        {/* Profile at top */}
+        <div className="p-4 border-b border-white/5">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-sm font-bold text-white shadow-lg">ВЫ</div>
+              <span className="online-dot absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-background" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-white/95">Мой профиль</p>
+              <p className="text-xs text-emerald-400">● В сети</p>
+            </div>
+            <div className="flex gap-1.5">
+              <button className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
+                <Icon name="Plus" size={15} className="text-white/70" />
+              </button>
+              <button className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
+                <Icon name="Settings" size={15} className="text-white/70" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -198,16 +208,7 @@ export default function Index() {
           ))}
         </div>
 
-        <div className="p-4 border-t border-white/5">
-          <div className="flex items-center gap-3 p-2 rounded-2xl hover:bg-white/5 transition-colors cursor-pointer">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-xs font-bold text-white">ВЫ</div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white/90">Мой профиль</p>
-              <p className="text-xs text-emerald-400">● В сети</p>
-            </div>
-            <Icon name="ChevronRight" size={14} className="text-white/30" />
-          </div>
-        </div>
+
       </aside>
 
       {/* Main area */}
