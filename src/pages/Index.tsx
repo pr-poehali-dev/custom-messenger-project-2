@@ -31,6 +31,27 @@ interface Profile {
 type CallState = "idle" | "calling" | "active";
 type CallType = "audio" | "video";
 
+interface User {
+  id: number;
+  name: string;
+  nick: string;
+  avatar: string;
+  color: string;
+  isOnline: boolean;
+  status: string;
+}
+
+const USERS: User[] = [
+  { id: 101, name: "Алексей Громов", nick: "@alexgrom", avatar: "АГ", color: "from-blue-500 to-cyan-400", isOnline: true, status: "Пишу код ☕" },
+  { id: 102, name: "Мария Светлова", nick: "@masha_s", avatar: "МС", color: "from-pink-500 to-rose-400", isOnline: true, status: "В сети" },
+  { id: 103, name: "Никита Орлов", nick: "@nikita_o", avatar: "НО", color: "from-violet-500 to-purple-400", isOnline: false, status: "Не беспокоить" },
+  { id: 104, name: "Дарья Зимина", nick: "@dasha_z", avatar: "ДЗ", color: "from-emerald-500 to-teal-400", isOnline: true, status: "На встрече" },
+  { id: 105, name: "Роман Белов", nick: "@roman_b", avatar: "РБ", color: "from-amber-500 to-orange-400", isOnline: false, status: "Отошёл" },
+  { id: 106, name: "Екатерина Лис", nick: "@katya_lis", avatar: "ЕЛ", color: "from-indigo-500 to-blue-400", isOnline: true, status: "В сети" },
+  { id: 107, name: "Сергей Волков", nick: "@s_volkov", avatar: "СВ", color: "from-red-500 to-pink-400", isOnline: false, status: "Занят" },
+  { id: 108, name: "Юлия Небо", nick: "@yulya_sky", avatar: "ЮН", color: "from-sky-500 to-blue-400", isOnline: true, status: "🎵 Слушаю музыку" },
+];
+
 const CHATS: Chat[] = [];
 
 const AVATAR_COLORS: Record<string, string> = {
@@ -75,6 +96,12 @@ export default function Index() {
   const [editStatus, setEditStatus] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Global search
+  const [showSearch, setShowSearch] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const globalSearchRef = useRef<HTMLInputElement>(null);
+  const [chats, setChats] = useState<Chat[]>(CHATS);
+
   // Call state
   const [callState, setCallState] = useState<CallState>("idle");
   const [callType, setCallType] = useState<CallType>("audio");
@@ -112,6 +139,38 @@ export default function Index() {
     reader.readAsDataURL(file);
   };
 
+  const globalResults = globalQuery.trim().length >= 1
+    ? USERS.filter((u) =>
+        u.nick.toLowerCase().includes(globalQuery.toLowerCase()) ||
+        u.name.toLowerCase().includes(globalQuery.toLowerCase())
+      )
+    : [];
+
+  const openChatWithUser = (user: User) => {
+    const existing = chats.find((c) => c.id === user.id);
+    if (existing) {
+      handleSelectChat(existing);
+    } else {
+      const newChat: Chat = {
+        id: user.id,
+        name: user.name,
+        avatar: user.avatar,
+        lastMessage: "",
+        time: "",
+        unread: 0,
+        isOnline: user.isOnline,
+        isGroup: false,
+        messages: [],
+      };
+      setChats((prev) => [newChat, ...prev]);
+      setMessages((prev) => ({ ...prev, [newChat.id]: [] }));
+      setUnread((prev) => ({ ...prev, [newChat.id]: 0 }));
+      setActiveChat(newChat);
+    }
+    setShowSearch(false);
+    setGlobalQuery("");
+  };
+
   const startCall = (type: CallType) => {
     setCallType(type);
     setIsMuted(false);
@@ -122,7 +181,7 @@ export default function Index() {
 
   const endCall = () => setCallState("idle");
 
-  const filteredChats = CHATS.filter((c) =>
+  const filteredChats = chats.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -240,6 +299,101 @@ export default function Index() {
         </div>
       )}
 
+      {/* Global search modal */}
+      {showSearch && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-20" onClick={() => { setShowSearch(false); setGlobalQuery(""); }}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative w-full max-w-md mx-4 animate-scale-in" onClick={(e) => e.stopPropagation()}>
+            {/* Search input */}
+            <div className="glass-strong rounded-2xl p-3 flex items-center gap-3 mb-2">
+              <Icon name="Search" size={18} className="text-white/40 flex-shrink-0" />
+              <input
+                ref={globalSearchRef}
+                value={globalQuery}
+                onChange={(e) => setGlobalQuery(e.target.value)}
+                placeholder="Поиск по нику или имени..."
+                className="flex-1 bg-transparent text-white/90 placeholder:text-white/30 text-sm focus:outline-none"
+              />
+              {globalQuery && (
+                <button onClick={() => setGlobalQuery("")} className="text-white/30 hover:text-white/60 transition-colors">
+                  <Icon name="X" size={16} />
+                </button>
+              )}
+            </div>
+
+            {/* Results */}
+            {globalQuery.trim().length >= 1 && (
+              <div className="glass-strong rounded-2xl overflow-hidden">
+                {globalResults.length === 0 ? (
+                  <div className="flex flex-col items-center py-8 gap-2 text-center">
+                    <Icon name="UserX" size={28} className="text-white/20" />
+                    <p className="text-white/30 text-sm">Пользователь не найден</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-white/5">
+                    {globalResults.map((user) => (
+                      <button
+                        key={user.id}
+                        onClick={() => openChatWithUser(user)}
+                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors group"
+                      >
+                        <div className="relative flex-shrink-0">
+                          <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${user.color} flex items-center justify-center text-sm font-bold text-white shadow-lg`}>
+                            {user.avatar}
+                          </div>
+                          {user.isOnline && (
+                            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-background" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0 text-left">
+                          <p className="text-sm font-semibold text-white/90">{user.name}</p>
+                          <p className="text-xs text-violet-400">{user.nick}</p>
+                          <p className="text-xs text-white/30 truncate">{user.status}</p>
+                        </div>
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                            <Icon name="MessageCircle" size={15} className="text-white" />
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {globalQuery.trim().length === 0 && (
+              <div className="glass-strong rounded-2xl p-4">
+                <p className="text-xs text-white/30 mb-3 font-medium uppercase tracking-wider">Все пользователи</p>
+                <div className="space-y-1">
+                  {USERS.map((user) => (
+                    <button
+                      key={user.id}
+                      onClick={() => openChatWithUser(user)}
+                      className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors group"
+                    >
+                      <div className="relative flex-shrink-0">
+                        <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${user.color} flex items-center justify-center text-xs font-bold text-white`}>
+                          {user.avatar}
+                        </div>
+                        {user.isOnline && (
+                          <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-background" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="text-sm font-medium text-white/85">{user.name}</p>
+                        <p className="text-xs text-violet-400/70">{user.nick}</p>
+                      </div>
+                      <Icon name="ChevronRight" size={14} className="text-white/20 group-hover:text-white/50 transition-colors" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside className="w-80 flex-shrink-0 flex flex-col glass border-r border-white/5 relative z-10">
         {/* Profile at top */}
@@ -259,8 +413,11 @@ export default function Index() {
               <p className="text-xs text-emerald-400 truncate">● {profile.status}</p>
             </button>
             <div className="flex gap-1.5">
-              <button className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
-                <Icon name="Plus" size={15} className="text-white/70" />
+              <button
+                onClick={() => { setShowSearch(true); setTimeout(() => globalSearchRef.current?.focus(), 50); }}
+                className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors"
+              >
+                <Icon name="UserSearch" size={15} className="text-white/70" />
               </button>
               <button onClick={openProfile} className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
                 <Icon name="Settings" size={15} className="text-white/70" />
