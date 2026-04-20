@@ -25,109 +25,7 @@ interface Chat {
 type CallState = "idle" | "calling" | "active";
 type CallType = "audio" | "video";
 
-const CHATS: Chat[] = [
-  {
-    id: 1,
-    name: "Алёна Смирнова",
-    avatar: "АС",
-    lastMessage: "Отправила файлы на проверку 📎",
-    time: "14:32",
-    unread: 3,
-    isOnline: true,
-    isGroup: false,
-    messages: [
-      { id: 1, text: "Привет! Как дела с проектом?", time: "14:20", isOut: false },
-      { id: 2, text: "Всё идёт по плану, сегодня заканчиваю основной блок", time: "14:22", isOut: true },
-      { id: 3, text: "Отлично! Успеваем к дедлайну?", time: "14:25", isOut: false },
-      { id: 4, text: "Да, точно. Уже финальный этап", time: "14:28", isOut: true },
-      { id: 5, text: "Отправила файлы на проверку 📎", time: "14:32", isOut: false },
-    ],
-  },
-  {
-    id: 2,
-    name: "Команда разработки",
-    avatar: "КР",
-    lastMessage: "Максим: Деплой прошёл успешно 🚀",
-    time: "13:15",
-    unread: 7,
-    isOnline: false,
-    isGroup: true,
-    members: 8,
-    messages: [
-      { id: 1, text: "Начинаем деплой на прод?", time: "12:50", isOut: false, author: "Максим" },
-      { id: 2, text: "Подождите, тестирую последний фикс", time: "12:55", isOut: true },
-      { id: 3, text: "Готово, всё чисто", time: "13:02", isOut: true },
-      { id: 4, text: "Запускаем!", time: "13:10", isOut: false, author: "Дарья" },
-      { id: 5, text: "Деплой прошёл успешно 🚀", time: "13:15", isOut: false, author: "Максим" },
-    ],
-  },
-  {
-    id: 3,
-    name: "Дмитрий Козлов",
-    avatar: "ДК",
-    lastMessage: "Встреча в 16:00, не забудь",
-    time: "11:44",
-    unread: 0,
-    isOnline: true,
-    isGroup: false,
-    messages: [
-      { id: 1, text: "Дима, ты получил предложение?", time: "11:30", isOut: true },
-      { id: 2, text: "Да, изучаю. Выглядит интересно", time: "11:35", isOut: false },
-      { id: 3, text: "Если вопросы — звони", time: "11:40", isOut: true },
-      { id: 4, text: "Встреча в 16:00, не забудь", time: "11:44", isOut: false },
-    ],
-  },
-  {
-    id: 4,
-    name: "Маркетинг и продажи",
-    avatar: "МП",
-    lastMessage: "Юля: Новый кейс готов к публикации",
-    time: "Вчера",
-    unread: 0,
-    isOnline: false,
-    isGroup: true,
-    members: 12,
-    messages: [
-      { id: 1, text: "Когда публикуем кейс по проекту?", time: "Вчера", isOut: false, author: "Юля" },
-      { id: 2, text: "Ждём согласования от клиента", time: "Вчера", isOut: true },
-      { id: 3, text: "Получила подтверждение!", time: "Вчера", isOut: false, author: "Юля" },
-      { id: 4, text: "Новый кейс готов к публикации", time: "Вчера", isOut: false, author: "Юля" },
-    ],
-  },
-  {
-    id: 5,
-    name: "Ирина Новикова",
-    avatar: "ИН",
-    lastMessage: "Спасибо большое! ❤️",
-    time: "Пн",
-    unread: 0,
-    isOnline: false,
-    isGroup: false,
-    messages: [
-      { id: 1, text: "Ира, можешь помочь с презентацией?", time: "Пн", isOut: true },
-      { id: 2, text: "Конечно! Пришли материалы", time: "Пн", isOut: false },
-      { id: 3, text: "Отправил всё на почту", time: "Пн", isOut: true },
-      { id: 4, text: "Спасибо большое! ❤️", time: "Пн", isOut: false },
-    ],
-  },
-  {
-    id: 6,
-    name: "Общий чат офиса",
-    avatar: "ОЧ",
-    lastMessage: "Сергей: Кофемашина сломалась 😭",
-    time: "Пн",
-    unread: 24,
-    isOnline: false,
-    isGroup: true,
-    members: 43,
-    messages: [
-      { id: 1, text: "Кто взял мою кружку из холодильника?", time: "Пн", isOut: false, author: "Анна" },
-      { id: 2, text: "Ребята, заказываем пиццу в пятницу?", time: "Пн", isOut: false, author: "Виктор" },
-      { id: 3, text: "Я за!", time: "Пн", isOut: true },
-      { id: 4, text: "Кофемашина сломалась 😭", time: "Пн", isOut: false, author: "Сергей" },
-    ],
-  },
-];
+const CHATS: Chat[] = [];
 
 const AVATAR_COLORS: Record<string, string> = {
   АС: "from-pink-500 to-rose-400",
@@ -150,7 +48,7 @@ function generateRoomName(chatId: number, chatName: string) {
 }
 
 export default function Index() {
-  const [activeChat, setActiveChat] = useState<Chat>(CHATS[0]);
+  const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [messages, setMessages] = useState<Record<number, Message[]>>(
     Object.fromEntries(CHATS.map((c) => [c.id, c.messages]))
@@ -202,7 +100,7 @@ export default function Index() {
   };
 
   const handleSend = () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || !activeChat) return;
     const newMsg: Message = {
       id: Date.now(),
       text: inputValue.trim(),
@@ -216,9 +114,9 @@ export default function Index() {
     setInputValue("");
   };
 
-  const currentMessages = messages[activeChat.id] || [];
-  const roomName = generateRoomName(activeChat.id, activeChat.name);
-  const jitsiUrl = `https://meet.jit.si/${roomName}#userInfo.displayName="Я"&config.startWithAudioMuted=${isMuted}&config.startWithVideoMuted=${callType === "audio" || isCamOff}&config.toolbarButtons=[]&config.disableDeepLinking=true&config.prejoinPageEnabled=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.SHOW_WATERMARK_FOR_GUESTS=false`;
+  const currentMessages = activeChat ? (messages[activeChat.id] || []) : [];
+  const roomName = activeChat ? generateRoomName(activeChat.id, activeChat.name) : "";
+  const jitsiUrl = activeChat ? `https://meet.jit.si/${roomName}#userInfo.displayName="Я"&config.startWithAudioMuted=${isMuted}&config.startWithVideoMuted=${callType === "audio" || isCamOff}&config.toolbarButtons=[]&config.disableDeepLinking=true&config.prejoinPageEnabled=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.SHOW_WATERMARK_FOR_GUESTS=false` : "";
 
   return (
     <div className="h-screen w-screen flex overflow-hidden relative bg-background">
@@ -256,12 +154,21 @@ export default function Index() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
+          {filteredChats.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full gap-3 py-12 text-center">
+              <div className="w-14 h-14 rounded-2xl glass flex items-center justify-center mb-1">
+                <Icon name="MessageSquare" size={24} className="text-white/20" />
+              </div>
+              <p className="text-white/30 text-sm">Чатов пока нет</p>
+              <p className="text-white/20 text-xs">Нажмите + чтобы начать</p>
+            </div>
+          )}
           {filteredChats.map((chat, i) => (
             <button
               key={chat.id}
               onClick={() => handleSelectChat(chat)}
               className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all duration-200 animate-fade-in ${
-                activeChat.id === chat.id ? "chat-item-active" : "hover:bg-white/5"
+                activeChat?.id === chat.id ? "chat-item-active" : "hover:bg-white/5"
               }`}
               style={{ animationDelay: `${i * 0.04}s` }}
             >
@@ -305,6 +212,15 @@ export default function Index() {
 
       {/* Main area */}
       <main className="flex-1 flex flex-col relative z-10 min-w-0">
+        {!activeChat ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center animate-fade-in">
+            <div className="w-20 h-20 rounded-3xl glass flex items-center justify-center mb-2">
+              <Icon name="MessageSquareDashed" size={36} className="text-white/15" />
+            </div>
+            <p className="text-white/30 text-lg font-medium">Выберите чат</p>
+            <p className="text-white/20 text-sm">или создайте новый, нажав + в боковой панели</p>
+          </div>
+        ) : (<>
         {/* Chat header */}
         <div className="glass border-b border-white/5 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -479,6 +395,7 @@ export default function Index() {
             </button>
           </div>
         </div>
+        </>)}
       </main>
     </div>
   );
