@@ -1,637 +1,724 @@
-import { useState, useEffect, useRef } from "react";
-import Icon from "@/components/ui/icon";
+import { useEffect, useRef, useState, useCallback } from "react";
 
-interface Message {
+const CANVAS_W = 800;
+const CANVAS_H = 600;
+const TILE = 40;
+const COLS = CANVAS_W / TILE; // 20
+const ROWS = CANVAS_H / TILE; // 15
+
+const PLAYER_SPEED = 2.5;
+const BULLET_SPEED = 5;
+const ENEMY_SPEED = 1.2;
+const ENEMY_SHOOT_INTERVAL = 1800;
+const SHOOT_COOLDOWN = 350;
+const ENEMY_MOVE_INTERVAL = 600;
+
+type Dir = "up" | "down" | "left" | "right";
+
+interface Tank {
+  x: number;
+  y: number;
+  dir: Dir;
+  hp: number;
   id: number;
-  text: string;
-  time: string;
-  isOut: boolean;
-  author?: string;
 }
 
-interface Chat {
+interface Bullet {
+  x: number;
+  y: number;
+  dir: Dir;
+  owner: "player" | "enemy";
   id: number;
-  name: string;
-  avatar: string;
-  lastMessage: string;
-  time: string;
-  unread: number;
-  isOnline: boolean;
-  isGroup: boolean;
-  members?: number;
-  messages: Message[];
 }
 
-interface Profile {
-  name: string;
-  status: string;
-  photo: string | null;
+interface Wall {
+  x: number;
+  y: number;
+  hp: number; // 1 = brick (destructible), 2 = steel
 }
 
-type CallState = "idle" | "calling" | "active";
-type CallType = "audio" | "video";
-
-interface User {
+interface Explosion {
+  x: number;
+  y: number;
+  r: number;
+  maxR: number;
   id: number;
-  name: string;
-  nick: string;
-  avatar: string;
-  color: string;
-  isOnline: boolean;
-  status: string;
 }
 
-const USERS: User[] = [
-  { id: 101, name: "Алексей Громов", nick: "@alexgrom", avatar: "АГ", color: "from-blue-500 to-cyan-400", isOnline: true, status: "Пишу код ☕" },
-  { id: 102, name: "Мария Светлова", nick: "@masha_s", avatar: "МС", color: "from-pink-500 to-rose-400", isOnline: true, status: "В сети" },
-  { id: 103, name: "Никита Орлов", nick: "@nikita_o", avatar: "НО", color: "from-violet-500 to-purple-400", isOnline: false, status: "Не беспокоить" },
-  { id: 104, name: "Дарья Зимина", nick: "@dasha_z", avatar: "ДЗ", color: "from-emerald-500 to-teal-400", isOnline: true, status: "На встрече" },
-  { id: 105, name: "Роман Белов", nick: "@roman_b", avatar: "РБ", color: "from-amber-500 to-orange-400", isOnline: false, status: "Отошёл" },
-  { id: 106, name: "Екатерина Лис", nick: "@katya_lis", avatar: "ЕЛ", color: "from-indigo-500 to-blue-400", isOnline: true, status: "В сети" },
-  { id: 107, name: "Сергей Волков", nick: "@s_volkov", avatar: "СВ", color: "from-red-500 to-pink-400", isOnline: false, status: "Занят" },
-  { id: 108, name: "Юлия Небо", nick: "@yulya_sky", avatar: "ЮН", color: "from-sky-500 to-blue-400", isOnline: true, status: "🎵 Слушаю музыку" },
-];
+type GameState = "menu" | "playing" | "paused" | "gameover" | "win";
 
-const CHATS: Chat[] = [];
+let eid = 0;
+const nextId = () => ++eid;
 
-const AVATAR_COLORS: Record<string, string> = {
-  АС: "from-pink-500 to-rose-400",
-  КР: "from-violet-500 to-purple-400",
-  ДК: "from-blue-500 to-cyan-400",
-  МП: "from-amber-500 to-orange-400",
-  ИН: "from-emerald-500 to-teal-400",
-  ОЧ: "from-indigo-500 to-blue-400",
-};
-
-function formatDuration(s: number) {
-  const m = Math.floor(s / 60).toString().padStart(2, "0");
-  const sec = (s % 60).toString().padStart(2, "0");
-  return `${m}:${sec}`;
+function dirToVec(d: Dir): [number, number] {
+  return d === "up" ? [0, -1] : d === "down" ? [0, 1] : d === "left" ? [-1, 0] : [1, 0];
 }
 
-function generateRoomName(chatId: number, chatName: string) {
-  const slug = chatName.replace(/\s+/g, "-").replace(/[^a-zA-Zа-яА-Я0-9-]/g, "");
-  return `potok-chat-${chatId}-${slug}`;
+function rectsOverlap(ax: number, ay: number, aw: number, ah: number, bx: number, by: number, bw: number, bh: number) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-function getInitials(name: string) {
-  return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
+function buildMap(level: number): Wall[] {
+  const walls: Wall[] = [];
+  const add = (col: number, row: number, hp: number) =>
+    walls.push({ x: col * TILE, y: row * TILE, hp });
+
+  // Border of steel
+  for (let c = 0; c < COLS; c++) {
+    add(c, 0, 2);
+    add(c, ROWS - 1, 2);
+  }
+  for (let r = 1; r < ROWS - 1; r++) {
+    add(0, r, 2);
+    add(COLS - 1, r, 2);
+  }
+
+  // Level patterns
+  const patterns: number[][] = level === 1
+    ? [
+        [2, 3], [3, 3], [4, 3],
+        [7, 2], [7, 3], [7, 4],
+        [10, 5], [11, 5], [12, 5],
+        [5, 7], [5, 8], [5, 9],
+        [14, 6], [14, 7], [14, 8],
+        [9, 10], [10, 10], [11, 10],
+        [3, 11], [4, 11], [5, 11],
+        [15, 10], [15, 11], [15, 12],
+        [8, 3], [8, 4],
+        [13, 3], [13, 4],
+      ]
+    : level === 2
+    ? [
+        [2, 2], [3, 2], [4, 2], [5, 2],
+        [8, 2], [8, 3], [8, 4], [8, 5],
+        [12, 2], [13, 2], [14, 2],
+        [3, 5], [3, 6], [3, 7],
+        [6, 6], [7, 6], [8, 6],
+        [11, 5], [11, 6], [11, 7],
+        [15, 4], [15, 5], [15, 6], [15, 7],
+        [5, 9], [6, 9], [7, 9],
+        [10, 9], [11, 9], [12, 9],
+        [4, 11], [5, 11],
+        [14, 10], [14, 11],
+      ]
+    : [
+        [2, 2], [3, 2], [5, 2], [6, 2], [8, 2], [9, 2], [11, 2], [12, 2],
+        [2, 4], [3, 4], [4, 4], [7, 4], [8, 4], [12, 4], [13, 4],
+        [5, 5], [5, 6], [5, 7], [10, 5], [10, 6], [10, 7],
+        [3, 8], [4, 8], [7, 8], [8, 8], [12, 8], [13, 8],
+        [2, 10], [6, 10], [7, 10], [11, 10], [15, 10],
+        [4, 11], [4, 12], [9, 11], [9, 12], [14, 11], [14, 12],
+      ];
+
+  for (const [c, r] of patterns) {
+    if (c >= 1 && c < COLS - 1 && r >= 1 && r < ROWS - 1) {
+      add(c, r, level === 3 ? (Math.random() < 0.3 ? 2 : 1) : 1);
+    }
+  }
+
+  return walls;
+}
+
+function spawnEnemies(level: number): Tank[] {
+  const count = 4 + level * 2;
+  const positions: [number, number][] = [
+    [2, 1], [COLS - 3, 1], [Math.floor(COLS / 2), 1],
+    [3, 1], [COLS - 4, 1], [5, 1],
+    [COLS - 6, 1], [7, 1], [COLS - 8, 1], [9, 1],
+  ];
+  return positions.slice(0, count).map(([c, r]) => ({
+    x: c * TILE,
+    y: r * TILE,
+    dir: "down" as Dir,
+    hp: level >= 3 ? 2 : 1,
+    id: nextId(),
+  }));
+}
+
+function drawTank(
+  ctx: CanvasRenderingContext2D,
+  tank: Tank,
+  isPlayer: boolean,
+  size = TILE - 4
+) {
+  const { x, y, dir } = tank;
+  const cx = x + TILE / 2;
+  const cy = y + TILE / 2;
+  const half = size / 2;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  const angle = dir === "up" ? 0 : dir === "right" ? Math.PI / 2 : dir === "down" ? Math.PI : -Math.PI / 2;
+  ctx.rotate(angle);
+
+  // Body
+  const bodyColor = isPlayer ? "#4ade80" : "#f87171";
+  const darkColor = isPlayer ? "#166534" : "#7f1d1d";
+  const trackColor = isPlayer ? "#166534" : "#991b1b";
+
+  // Tracks
+  ctx.fillStyle = trackColor;
+  ctx.beginPath();
+  ctx.roundRect(-half, -half, 8, size, 3);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(half - 8, -half, 8, size, 3);
+  ctx.fill();
+
+  // Track lines
+  ctx.strokeStyle = isPlayer ? "#14532d" : "#7f1d1d";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    const yPos = -half + 4 + i * (size / 4 - 1);
+    ctx.beginPath();
+    ctx.moveTo(-half + 1, yPos);
+    ctx.lineTo(-half + 7, yPos);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(half - 7, yPos);
+    ctx.lineTo(half - 1, yPos);
+    ctx.stroke();
+  }
+
+  // Main body
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.roundRect(-half + 9, -half + 3, size - 18, size - 6, 4);
+  ctx.fill();
+
+  // Turret
+  ctx.fillStyle = darkColor;
+  ctx.beginPath();
+  ctx.arc(0, 0, half * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.arc(0, 0, half * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Barrel
+  ctx.fillStyle = darkColor;
+  ctx.fillRect(-3, -half - 8, 6, half + 8);
+
+  // Barrel tip
+  ctx.fillStyle = isPlayer ? "#86efac" : "#fca5a5";
+  ctx.fillRect(-2, -half - 10, 4, 4);
+
+  ctx.restore();
+}
+
+function drawBullet(ctx: CanvasRenderingContext2D, b: Bullet) {
+  const cx = b.x + 4;
+  const cy = b.y + 4;
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  const isHoriz = b.dir === "left" || b.dir === "right";
+  const w = isHoriz ? 10 : 4;
+  const h = isHoriz ? 4 : 10;
+
+  const color = b.owner === "player" ? "#fbbf24" : "#f87171";
+  const glow = b.owner === "player" ? "#fef08a" : "#fecaca";
+
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawWall(ctx: CanvasRenderingContext2D, w: Wall) {
+  if (w.hp === 2) {
+    // Steel
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillRect(w.x + 1, w.y + 1, TILE - 2, TILE - 2);
+    ctx.fillStyle = "#64748b";
+    ctx.fillRect(w.x + 2, w.y + 2, TILE - 4, TILE - 4);
+    // Cross pattern
+    ctx.fillStyle = "#475569";
+    ctx.fillRect(w.x + 1, w.y + TILE / 2 - 1, TILE - 2, 2);
+    ctx.fillRect(w.x + TILE / 2 - 1, w.y + 1, 2, TILE - 2);
+  } else {
+    // Brick
+    ctx.fillStyle = "#b45309";
+    ctx.fillRect(w.x + 1, w.y + 1, TILE - 2, TILE - 2);
+    ctx.fillStyle = "#92400e";
+    // Brick pattern
+    const bw = (TILE - 2) / 2;
+    const bh = (TILE - 2) / 2;
+    ctx.fillRect(w.x + 2, w.y + 2, bw - 2, bh - 2);
+    ctx.fillRect(w.x + bw + 2, w.y + 2, bw - 4, bh - 2);
+    ctx.fillRect(w.x + 2, w.y + bh + 2, bw - 4, bh - 4);
+    ctx.fillRect(w.x + bw + 2, w.y + bh + 2, bw - 2, bh - 4);
+  }
+}
+
+function drawExplosion(ctx: CanvasRenderingContext2D, e: Explosion) {
+  const progress = e.r / e.maxR;
+  const alpha = 1 - progress;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Outer ring
+  const grad = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.r);
+  grad.addColorStop(0, "#fef08a");
+  grad.addColorStop(0.4, "#f97316");
+  grad.addColorStop(0.8, "#ef4444");
+  grad.addColorStop(1, "transparent");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
 }
 
 export default function Index() {
-  const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [inputValue, setInputValue] = useState("");
-  const [messages, setMessages] = useState<Record<number, Message[]>>(
-    Object.fromEntries(CHATS.map((c) => [c.id, c.messages]))
-  );
-  const [unread, setUnread] = useState<Record<number, number>>(
-    Object.fromEntries(CHATS.map((c) => [c.id, c.unread]))
-  );
-  const [search, setSearch] = useState("");
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [gameState, setGameState] = useState<GameState>("menu");
+  const [level, setLevel] = useState(1);
+  const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [enemyCount, setEnemyCount] = useState(0);
+  const stateRef = useRef(gameState);
+  stateRef.current = gameState;
 
-  // Profile
-  const [profile, setProfile] = useState<Profile>({ name: "Мой профиль", status: "В сети", photo: null });
-  const [showProfile, setShowProfile] = useState(false);
-  const [editName, setEditName] = useState("");
-  const [editStatus, setEditStatus] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const playerRef = useRef<Tank>({ x: TILE * 9, y: TILE * 12, dir: "up", hp: 1, id: 0 });
+  const enemiesRef = useRef<Tank[]>([]);
+  const bulletsRef = useRef<Bullet[]>([]);
+  const wallsRef = useRef<Wall[]>([]);
+  const explosionsRef = useRef<Explosion[]>([]);
+  const keysRef = useRef<Set<string>>(new Set());
+  const lastShootRef = useRef(0);
+  const lastEnemyMoveRef = useRef<Record<number, number>>({});
+  const lastEnemyShootRef = useRef<Record<number, number>>({});
+  const levelRef = useRef(level);
+  const scoreRef = useRef(score);
+  const livesRef = useRef(lives);
+  const animRef = useRef<number>(0);
+  const playerInvRef = useRef(0); // invincibility frames after respawn
+  const levelUpRef = useRef(false);
 
-  // Global search
-  const [showSearch, setShowSearch] = useState(false);
-  const [globalQuery, setGlobalQuery] = useState("");
-  const globalSearchRef = useRef<HTMLInputElement>(null);
-  const [chats, setChats] = useState<Chat[]>(CHATS);
+  levelRef.current = level;
+  scoreRef.current = score;
+  livesRef.current = lives;
 
-  // Call state
-  const [callState, setCallState] = useState<CallState>("idle");
-  const [callType, setCallType] = useState<CallType>("audio");
-  const [callDuration, setCallDuration] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isCamOff, setIsCamOff] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startLevel = useCallback((lv: number, sc: number, lv_lives: number) => {
+    eid = 0;
+    playerRef.current = { x: TILE * 9, y: TILE * 12, dir: "up", hp: 1, id: 0 };
+    enemiesRef.current = spawnEnemies(lv);
+    wallsRef.current = buildMap(lv);
+    bulletsRef.current = [];
+    explosionsRef.current = [];
+    lastEnemyMoveRef.current = {};
+    lastEnemyShootRef.current = {};
+    playerInvRef.current = 120;
+    levelUpRef.current = false;
+    setLevel(lv);
+    setScore(sc);
+    setLives(lv_lives);
+    setEnemyCount(enemiesRef.current.length);
+    setGameState("playing");
+  }, []);
+
+  const handleKey = useCallback((e: KeyboardEvent, down: boolean) => {
+    if (down) keysRef.current.add(e.key);
+    else keysRef.current.delete(e.key);
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) {
+      e.preventDefault();
+    }
+  }, []);
 
   useEffect(() => {
-    if (callState === "active") {
-      timerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setCallDuration(0);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [callState]);
-
-  const openProfile = () => {
-    setEditName(profile.name);
-    setEditStatus(profile.status);
-    setShowProfile(true);
-  };
-
-  const saveProfile = () => {
-    setProfile((p) => ({ ...p, name: editName.trim() || p.name, status: editStatus.trim() || p.status }));
-    setShowProfile(false);
-  };
-
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setProfile((p) => ({ ...p, photo: ev.target?.result as string }));
-    reader.readAsDataURL(file);
-  };
-
-  const globalResults = globalQuery.trim().length >= 1
-    ? USERS.filter((u) =>
-        u.nick.toLowerCase().includes(globalQuery.toLowerCase()) ||
-        u.name.toLowerCase().includes(globalQuery.toLowerCase())
-      )
-    : [];
-
-  const openChatWithUser = (user: User) => {
-    const existing = chats.find((c) => c.id === user.id);
-    if (existing) {
-      handleSelectChat(existing);
-    } else {
-      const newChat: Chat = {
-        id: user.id,
-        name: user.name,
-        avatar: user.avatar,
-        lastMessage: "",
-        time: "",
-        unread: 0,
-        isOnline: user.isOnline,
-        isGroup: false,
-        messages: [],
-      };
-      setChats((prev) => [newChat, ...prev]);
-      setMessages((prev) => ({ ...prev, [newChat.id]: [] }));
-      setUnread((prev) => ({ ...prev, [newChat.id]: 0 }));
-      setActiveChat(newChat);
-    }
-    setShowSearch(false);
-    setGlobalQuery("");
-  };
-
-  const startCall = (type: CallType) => {
-    setCallType(type);
-    setIsMuted(false);
-    setIsCamOff(false);
-    setCallState("calling");
-    setTimeout(() => setCallState("active"), 2000);
-  };
-
-  const endCall = () => setCallState("idle");
-
-  const filteredChats = chats.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const handleSelectChat = (chat: Chat) => {
-    if (callState !== "idle") endCall();
-    setActiveChat(chat);
-    setUnread((prev) => ({ ...prev, [chat.id]: 0 }));
-  };
-
-  const handleSend = () => {
-    if (!inputValue.trim() || !activeChat) return;
-    const newMsg: Message = {
-      id: Date.now(),
-      text: inputValue.trim(),
-      time: new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }),
-      isOut: true,
+    window.addEventListener("keydown", (e) => handleKey(e, true));
+    window.addEventListener("keyup", (e) => handleKey(e, false));
+    return () => {
+      window.removeEventListener("keydown", (e) => handleKey(e, true));
+      window.removeEventListener("keyup", (e) => handleKey(e, false));
     };
-    setMessages((prev) => ({
-      ...prev,
-      [activeChat.id]: [...(prev[activeChat.id] || []), newMsg],
-    }));
-    setInputValue("");
-  };
+  }, [handleKey]);
 
-  const currentMessages = activeChat ? (messages[activeChat.id] || []) : [];
-  const roomName = activeChat ? generateRoomName(activeChat.id, activeChat.name) : "";
-  const jitsiUrl = activeChat
-    ? `https://meet.jit.si/${roomName}#userInfo.displayName="Я"&config.startWithAudioMuted=${isMuted}&config.startWithVideoMuted=${callType === "audio" || isCamOff}&config.toolbarButtons=[]&config.disableDeepLinking=true&config.prejoinPageEnabled=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.SHOW_WATERMARK_FOR_GUESTS=false`
-    : "";
+  const solidForTank = useCallback((nx: number, ny: number, excludeId?: number) => {
+    for (const w of wallsRef.current) {
+      if (rectsOverlap(nx, ny, TILE - 2, TILE - 2, w.x, w.y, TILE, TILE)) return true;
+    }
+    for (const e of enemiesRef.current) {
+      if (e.id === excludeId) continue;
+      if (rectsOverlap(nx, ny, TILE - 2, TILE - 2, e.x, e.y, TILE - 2, TILE - 2)) return true;
+    }
+    if (excludeId !== 0) {
+      const p = playerRef.current;
+      if (rectsOverlap(nx, ny, TILE - 2, TILE - 2, p.x, p.y, TILE - 2, TILE - 2)) return true;
+    }
+    return false;
+  }, []);
+
+  useEffect(() => {
+    if (gameState !== "playing") return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d")!;
+    let lastTime = 0;
+
+    const loop = (ts: number) => {
+      if (stateRef.current !== "playing") return;
+      const dt = ts - lastTime;
+      lastTime = ts;
+
+      if (playerInvRef.current > 0) playerInvRef.current--;
+
+      // --- Player movement ---
+      const keys = keysRef.current;
+      const player = playerRef.current;
+      let moved = false;
+
+      if (keys.has("ArrowUp") || keys.has("w") || keys.has("W")) {
+        player.dir = "up";
+        const ny = player.y - PLAYER_SPEED;
+        if (!solidForTank(player.x, ny, 0)) { player.y = ny; moved = true; }
+      } else if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) {
+        player.dir = "down";
+        const ny = player.y + PLAYER_SPEED;
+        if (!solidForTank(player.x, ny, 0)) { player.y = ny; moved = true; }
+      } else if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) {
+        player.dir = "left";
+        const nx = player.x - PLAYER_SPEED;
+        if (!solidForTank(nx, player.y, 0)) { player.x = nx; moved = true; }
+      } else if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) {
+        player.dir = "right";
+        const nx = player.x + PLAYER_SPEED;
+        if (!solidForTank(nx, player.y, 0)) { player.x = nx; moved = true; }
+      }
+      void moved;
+
+      // --- Player shoot ---
+      if ((keys.has(" ") || keys.has("Enter")) && ts - lastShootRef.current > SHOOT_COOLDOWN) {
+        lastShootRef.current = ts;
+        const [dx, dy] = dirToVec(player.dir);
+        bulletsRef.current.push({
+          x: player.x + TILE / 2 - 4 + dx * TILE / 2,
+          y: player.y + TILE / 2 - 4 + dy * TILE / 2,
+          dir: player.dir,
+          owner: "player",
+          id: nextId(),
+        });
+      }
+
+      // --- Enemy AI ---
+      for (const enemy of enemiesRef.current) {
+        const now = ts;
+
+        // Move
+        if (!lastEnemyMoveRef.current[enemy.id] || now - lastEnemyMoveRef.current[enemy.id] > ENEMY_MOVE_INTERVAL) {
+          lastEnemyMoveRef.current[enemy.id] = now;
+          // Random direction change
+          if (Math.random() < 0.4) {
+            const dirs: Dir[] = ["up", "down", "left", "right"];
+            enemy.dir = dirs[Math.floor(Math.random() * dirs.length)];
+          }
+        }
+
+        const [dx, dy] = dirToVec(enemy.dir);
+        const nx = enemy.x + dx * ENEMY_SPEED;
+        const ny = enemy.y + dy * ENEMY_SPEED;
+        if (!solidForTank(nx, ny, enemy.id)) {
+          enemy.x = nx;
+          enemy.y = ny;
+        } else {
+          const dirs: Dir[] = ["up", "down", "left", "right"];
+          enemy.dir = dirs[Math.floor(Math.random() * dirs.length)];
+          lastEnemyMoveRef.current[enemy.id] = now;
+        }
+
+        // Shoot
+        if (!lastEnemyShootRef.current[enemy.id]) lastEnemyShootRef.current[enemy.id] = now - Math.random() * ENEMY_SHOOT_INTERVAL;
+        if (now - lastEnemyShootRef.current[enemy.id] > ENEMY_SHOOT_INTERVAL) {
+          lastEnemyShootRef.current[enemy.id] = now;
+          const [bdx, bdy] = dirToVec(enemy.dir);
+          bulletsRef.current.push({
+            x: enemy.x + TILE / 2 - 4 + bdx * TILE / 2,
+            y: enemy.y + TILE / 2 - 4 + bdy * TILE / 2,
+            dir: enemy.dir,
+            owner: "enemy",
+            id: nextId(),
+          });
+        }
+      }
+
+      // --- Move bullets ---
+      bulletsRef.current = bulletsRef.current.filter((b) => {
+        const [dx, dy] = dirToVec(b.dir);
+        b.x += dx * BULLET_SPEED;
+        b.y += dy * BULLET_SPEED;
+
+        // Out of bounds
+        if (b.x < 0 || b.x > CANVAS_W || b.y < 0 || b.y > CANVAS_H) return false;
+
+        // Hit wall
+        for (let wi = wallsRef.current.length - 1; wi >= 0; wi--) {
+          const w = wallsRef.current[wi];
+          if (rectsOverlap(b.x, b.y, 8, 8, w.x, w.y, TILE, TILE)) {
+            explosionsRef.current.push({ x: b.x + 4, y: b.y + 4, r: 2, maxR: 18, id: nextId() });
+            if (w.hp === 1) wallsRef.current.splice(wi, 1);
+            return false;
+          }
+        }
+
+        // Player bullet hits enemy
+        if (b.owner === "player") {
+          for (let ei = enemiesRef.current.length - 1; ei >= 0; ei--) {
+            const e = enemiesRef.current[ei];
+            if (rectsOverlap(b.x, b.y, 8, 8, e.x, e.y, TILE - 2, TILE - 2)) {
+              e.hp--;
+              explosionsRef.current.push({ x: e.x + TILE / 2, y: e.y + TILE / 2, r: 2, maxR: 28, id: nextId() });
+              if (e.hp <= 0) {
+                enemiesRef.current.splice(ei, 1);
+                setScore((s) => { scoreRef.current = s + 100 * levelRef.current; return s + 100 * levelRef.current; });
+                setEnemyCount(enemiesRef.current.length);
+              }
+              return false;
+            }
+          }
+        }
+
+        // Enemy bullet hits player
+        if (b.owner === "enemy" && playerInvRef.current === 0) {
+          const p = playerRef.current;
+          if (rectsOverlap(b.x, b.y, 8, 8, p.x, p.y, TILE - 2, TILE - 2)) {
+            explosionsRef.current.push({ x: p.x + TILE / 2, y: p.y + TILE / 2, r: 2, maxR: 32, id: nextId() });
+            const newLives = livesRef.current - 1;
+            setLives(newLives);
+            livesRef.current = newLives;
+            if (newLives <= 0) {
+              cancelAnimationFrame(animRef.current);
+              setGameState("gameover");
+              return false;
+            } else {
+              playerRef.current = { x: TILE * 9, y: TILE * 12, dir: "up", hp: 1, id: 0 };
+              playerInvRef.current = 180;
+            }
+            return false;
+          }
+        }
+
+        // Bullet vs bullet
+        for (let bi = bulletsRef.current.length - 1; bi >= 0; bi--) {
+          const other = bulletsRef.current[bi];
+          if (other.id === b.id || other.owner === b.owner) continue;
+          if (rectsOverlap(b.x, b.y, 8, 8, other.x, other.y, 8, 8)) {
+            explosionsRef.current.push({ x: b.x + 4, y: b.y + 4, r: 2, maxR: 12, id: nextId() });
+            bulletsRef.current.splice(bi, 1);
+            return false;
+          }
+        }
+
+        return true;
+      });
+
+      // --- Update explosions ---
+      explosionsRef.current = explosionsRef.current.filter((e) => {
+        e.r += 1.5;
+        return e.r < e.maxR;
+      });
+
+      // --- Level win check ---
+      if (enemiesRef.current.length === 0 && !levelUpRef.current) {
+        levelUpRef.current = true;
+        const nextLv = levelRef.current + 1;
+        if (nextLv > 3) {
+          cancelAnimationFrame(animRef.current);
+          setGameState("win");
+        } else {
+          setTimeout(() => startLevel(nextLv, scoreRef.current, livesRef.current), 1200);
+          setGameState("paused");
+          setTimeout(() => setGameState("playing"), 1200);
+        }
+      }
+
+      // --- Draw ---
+      ctx.fillStyle = "#1a1a2e";
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // Grid dots
+      ctx.fillStyle = "rgba(255,255,255,0.03)";
+      for (let c = 0; c <= COLS; c++)
+        for (let r = 0; r <= ROWS; r++)
+          ctx.fillRect(c * TILE, r * TILE, 1, 1);
+
+      // Walls
+      for (const w of wallsRef.current) drawWall(ctx, w);
+
+      // Bullets
+      for (const b of bulletsRef.current) drawBullet(ctx, b);
+
+      // Player
+      ctx.save();
+      if (playerInvRef.current > 0) ctx.globalAlpha = Math.sin(ts / 80) * 0.5 + 0.5;
+      drawTank(ctx, playerRef.current, true);
+      ctx.restore();
+
+      // Enemies
+      for (const e of enemiesRef.current) {
+        drawTank(ctx, e, false);
+        if (e.hp > 1) {
+          ctx.fillStyle = "#fbbf24";
+          ctx.font = "bold 11px monospace";
+          ctx.fillText("★", e.x + TILE / 2 - 5, e.y - 2);
+        }
+      }
+
+      // Explosions
+      for (const ex of explosionsRef.current) drawExplosion(ctx, ex);
+
+      animRef.current = requestAnimationFrame(loop);
+    };
+
+    animRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [gameState, solidForTank, startLevel]);
+
+  const heartStr = "❤️".repeat(lives);
 
   return (
-    <div className="h-screen w-screen flex overflow-hidden relative bg-background">
-      {/* Background orbs */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="float-orb absolute top-[-10%] left-[-5%] w-96 h-96 rounded-full blur-[80px]" style={{ background: "rgba(124, 58, 237, 0.18)" }} />
-        <div className="float-orb absolute bottom-[-10%] right-[-5%] w-80 h-80 rounded-full blur-[80px]" style={{ background: "rgba(56, 189, 248, 0.15)", animationDelay: "3s" }} />
-        <div className="float-orb absolute top-[40%] right-[30%] w-64 h-64 rounded-full blur-[60px]" style={{ background: "rgba(244, 114, 182, 0.08)", animationDelay: "1.5s" }} />
+    <div className="min-h-screen bg-[#0d0d1a] flex flex-col items-center justify-center select-none">
+      {/* HUD */}
+      {gameState === "playing" && (
+        <div className="flex items-center gap-8 mb-3 font-mono text-sm">
+          <span className="text-green-400 font-bold text-base">🎯 {score}</span>
+          <span className="text-yellow-300">УРОВЕНЬ {level}/3</span>
+          <span className="text-red-400">Враги: {enemyCount}</span>
+          <span className="text-pink-400">{heartStr}</span>
+        </div>
+      )}
+
+      {/* Canvas */}
+      <div className="relative">
+        <canvas
+          ref={canvasRef}
+          width={CANVAS_W}
+          height={CANVAS_H}
+          className="rounded-xl border border-white/10 shadow-2xl"
+          style={{ display: gameState === "playing" || gameState === "paused" ? "block" : "none" }}
+        />
+
+        {/* Level transition overlay */}
+        {gameState === "paused" && (
+          <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/60 backdrop-blur-sm">
+            <div className="text-center">
+              <p className="text-5xl mb-2">🏆</p>
+              <p className="text-2xl font-bold text-yellow-300 font-mono">УРОВЕНЬ ПРОЙДЕН!</p>
+              <p className="text-white/60 mt-2 font-mono">Загружаю следующий...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Menu */}
+        {gameState === "menu" && (
+          <div
+            className="flex flex-col items-center justify-center rounded-xl"
+            style={{ width: CANVAS_W, height: CANVAS_H, background: "#0d0d1a" }}
+          >
+            <div className="text-center mb-10">
+              <h1 className="text-7xl mb-2">🛡️</h1>
+              <h1
+                className="text-5xl font-black font-mono tracking-widest mb-2"
+                style={{ color: "#4ade80", textShadow: "0 0 30px #4ade8088" }}
+              >
+                ТАНКИ
+              </h1>
+              <p className="text-white/40 font-mono text-sm">Battle City · 2025</p>
+            </div>
+
+            <div className="mb-8 text-white/50 font-mono text-sm text-center space-y-1">
+              <p>🎮 <span className="text-white/70">Управление:</span> WASD / Стрелки</p>
+              <p>💥 <span className="text-white/70">Огонь:</span> Пробел / Enter</p>
+              <p>🏅 <span className="text-white/70">3 уровня, 3 жизни</span></p>
+            </div>
+
+            <button
+              onClick={() => startLevel(1, 0, 3)}
+              className="px-12 py-4 rounded-2xl text-xl font-bold font-mono tracking-wider transition-all hover:scale-105 active:scale-95"
+              style={{
+                background: "linear-gradient(135deg, #4ade80, #22d3ee)",
+                color: "#0d1117",
+                boxShadow: "0 0 40px #4ade8055",
+              }}
+            >
+              ▶ НАЧАТЬ ИГРУ
+            </button>
+          </div>
+        )}
+
+        {/* Game Over */}
+        {gameState === "gameover" && (
+          <div
+            className="flex flex-col items-center justify-center rounded-xl"
+            style={{ width: CANVAS_W, height: CANVAS_H, background: "#0d0d1a" }}
+          >
+            <p className="text-7xl mb-4">💥</p>
+            <h2 className="text-4xl font-black font-mono text-red-400 mb-2" style={{ textShadow: "0 0 30px #f8717166" }}>
+              GAME OVER
+            </h2>
+            <p className="text-white/50 font-mono mb-2">Уровень {level} · Счёт: <span className="text-yellow-300">{score}</span></p>
+            <div className="flex gap-4 mt-8">
+              <button
+                onClick={() => startLevel(level, 0, 3)}
+                className="px-8 py-3 rounded-xl font-bold font-mono text-base transition-all hover:scale-105 active:scale-95"
+                style={{ background: "#ef4444", color: "#fff", boxShadow: "0 0 20px #ef444455" }}
+              >
+                🔄 Повторить
+              </button>
+              <button
+                onClick={() => { setGameState("menu"); setScore(0); setLives(3); setLevel(1); }}
+                className="px-8 py-3 rounded-xl font-bold font-mono text-base transition-all hover:scale-105 active:scale-95"
+                style={{ background: "#334155", color: "#94a3b8" }}
+              >
+                🏠 Меню
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Win */}
+        {gameState === "win" && (
+          <div
+            className="flex flex-col items-center justify-center rounded-xl"
+            style={{ width: CANVAS_W, height: CANVAS_H, background: "#0d0d1a" }}
+          >
+            <p className="text-7xl mb-4">🏆</p>
+            <h2 className="text-4xl font-black font-mono text-yellow-300 mb-2" style={{ textShadow: "0 0 30px #fbbf2466" }}>
+              ПОБЕДА!
+            </h2>
+            <p className="text-white/60 font-mono mb-1">Все уровни пройдены!</p>
+            <p className="text-2xl font-bold font-mono text-green-400 mb-8">
+              Финальный счёт: {score}
+            </p>
+            <button
+              onClick={() => { startLevel(1, 0, 3); }}
+              className="px-10 py-4 rounded-2xl font-bold font-mono text-lg transition-all hover:scale-105 active:scale-95"
+              style={{
+                background: "linear-gradient(135deg, #fbbf24, #f97316)",
+                color: "#0d1117",
+                boxShadow: "0 0 40px #fbbf2455",
+              }}
+            >
+              🔄 Играть снова
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Profile modal */}
-      {showProfile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={() => setShowProfile(false)}>
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-          <div
-            className="relative w-full max-w-sm mx-4 glass-strong rounded-3xl p-6 animate-scale-in"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="font-display font-bold text-lg gradient-text">Мой профиль</h2>
-              <button onClick={() => setShowProfile(false)} className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
-                <Icon name="X" size={16} className="text-white/60" />
-              </button>
-            </div>
-
-            {/* Avatar upload */}
-            <div className="flex flex-col items-center mb-6">
-              <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-2xl font-bold text-white shadow-xl overflow-hidden">
-                  {profile.photo
-                    ? <img src={profile.photo} alt="avatar" className="w-full h-full object-cover" />
-                    : <span>{getInitials(profile.name)}</span>
-                  }
-                </div>
-                <div className="absolute inset-0 rounded-3xl bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                  <Icon name="Camera" size={22} className="text-white" />
-                </div>
-              </div>
-              <p className="text-xs text-white/30 mt-2">Нажмите чтобы изменить фото</p>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
-            </div>
-
-            {/* Name */}
-            <div className="mb-4">
-              <label className="block text-xs text-white/40 mb-1.5 font-medium uppercase tracking-wider">Имя</label>
-              <input
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                placeholder="Введите имя..."
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/25 focus:outline-none focus:border-violet-500/60 transition-all"
-              />
-            </div>
-
-            {/* Status */}
-            <div className="mb-6">
-              <label className="block text-xs text-white/40 mb-1.5 font-medium uppercase tracking-wider">Статус</label>
-              <input
-                value={editStatus}
-                onChange={(e) => setEditStatus(e.target.value)}
-                placeholder="Что у вас нового?"
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/25 focus:outline-none focus:border-violet-500/60 transition-all"
-              />
-              {/* Quick statuses */}
-              <div className="flex flex-wrap gap-2 mt-2">
-                {["В сети", "Не беспокоить", "Занят", "Отошёл"].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setEditStatus(s)}
-                    className={`text-xs px-3 py-1 rounded-xl transition-all ${editStatus === s ? "bg-violet-500/30 border border-violet-500/50 text-violet-300" : "glass text-white/40 hover:text-white/70"}`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Save */}
-            <button
-              onClick={saveProfile}
-              className="w-full py-3 rounded-2xl bg-gradient-to-r from-violet-500 to-blue-500 text-white font-semibold text-sm hover:opacity-90 active:scale-95 transition-all glow-purple"
-            >
-              Сохранить
-            </button>
-          </div>
+      {/* Controls hint */}
+      {gameState === "playing" && (
+        <div className="mt-3 text-white/20 font-mono text-xs flex gap-6">
+          <span>WASD / ← ↑ ↓ → — движение</span>
+          <span>Пробел / Enter — огонь</span>
         </div>
       )}
-
-      {/* Global search modal */}
-      {showSearch && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-20" onClick={() => { setShowSearch(false); setGlobalQuery(""); }}>
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-          <div className="relative w-full max-w-md mx-4 animate-scale-in" onClick={(e) => e.stopPropagation()}>
-            {/* Search input */}
-            <div className="glass-strong rounded-2xl p-3 flex items-center gap-3 mb-2">
-              <Icon name="Search" size={18} className="text-white/40 flex-shrink-0" />
-              <input
-                ref={globalSearchRef}
-                value={globalQuery}
-                onChange={(e) => setGlobalQuery(e.target.value)}
-                placeholder="Поиск по нику или имени..."
-                className="flex-1 bg-transparent text-white/90 placeholder:text-white/30 text-sm focus:outline-none"
-              />
-              {globalQuery && (
-                <button onClick={() => setGlobalQuery("")} className="text-white/30 hover:text-white/60 transition-colors">
-                  <Icon name="X" size={16} />
-                </button>
-              )}
-            </div>
-
-            {/* Results */}
-            {globalQuery.trim().length >= 1 && (
-              <div className="glass-strong rounded-2xl overflow-hidden">
-                {globalResults.length === 0 ? (
-                  <div className="flex flex-col items-center py-8 gap-2 text-center">
-                    <Icon name="UserX" size={28} className="text-white/20" />
-                    <p className="text-white/30 text-sm">Пользователь не найден</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-white/5">
-                    {globalResults.map((user) => (
-                      <button
-                        key={user.id}
-                        onClick={() => openChatWithUser(user)}
-                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors group"
-                      >
-                        <div className="relative flex-shrink-0">
-                          <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${user.color} flex items-center justify-center text-sm font-bold text-white shadow-lg`}>
-                            {user.avatar}
-                          </div>
-                          {user.isOnline && (
-                            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-background" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0 text-left">
-                          <p className="text-sm font-semibold text-white/90">{user.name}</p>
-                          <p className="text-xs text-violet-400">{user.nick}</p>
-                          <p className="text-xs text-white/30 truncate">{user.status}</p>
-                        </div>
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
-                            <Icon name="MessageCircle" size={15} className="text-white" />
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {globalQuery.trim().length === 0 && (
-              <div className="glass-strong rounded-2xl p-4">
-                <p className="text-xs text-white/30 mb-3 font-medium uppercase tracking-wider">Все пользователи</p>
-                <div className="space-y-1">
-                  {USERS.map((user) => (
-                    <button
-                      key={user.id}
-                      onClick={() => openChatWithUser(user)}
-                      className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors group"
-                    >
-                      <div className="relative flex-shrink-0">
-                        <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${user.color} flex items-center justify-center text-xs font-bold text-white`}>
-                          {user.avatar}
-                        </div>
-                        {user.isOnline && (
-                          <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-background" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0 text-left">
-                        <p className="text-sm font-medium text-white/85">{user.name}</p>
-                        <p className="text-xs text-violet-400/70">{user.nick}</p>
-                      </div>
-                      <Icon name="ChevronRight" size={14} className="text-white/20 group-hover:text-white/50 transition-colors" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Sidebar */}
-      <aside className="w-80 flex-shrink-0 flex flex-col glass border-r border-white/5 relative z-10">
-        {/* Profile at top */}
-        <div className="p-4 border-b border-white/5">
-          <div className="flex items-center gap-3">
-            <button className="relative group" onClick={openProfile}>
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center text-sm font-bold text-white shadow-lg overflow-hidden">
-                {profile.photo
-                  ? <img src={profile.photo} alt="avatar" className="w-full h-full object-cover" />
-                  : <span>{getInitials(profile.name)}</span>
-                }
-              </div>
-              <span className="online-dot absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-background" />
-            </button>
-            <button className="flex-1 min-w-0 text-left" onClick={openProfile}>
-              <p className="text-sm font-semibold text-white/95 truncate">{profile.name}</p>
-              <p className="text-xs text-emerald-400 truncate">● {profile.status}</p>
-            </button>
-            <div className="flex gap-1.5">
-              <button
-                onClick={() => { setShowSearch(true); setTimeout(() => globalSearchRef.current?.focus(), 50); }}
-                className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors"
-              >
-                <Icon name="UserSearch" size={15} className="text-white/70" />
-              </button>
-              <button onClick={openProfile} className="w-8 h-8 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
-                <Icon name="Settings" size={15} className="text-white/70" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="px-4 py-3">
-          <div className="relative">
-            <Icon name="Search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск чатов..."
-              className="w-full bg-white/5 border border-white/8 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white/80 placeholder:text-white/30 focus:outline-none focus:border-violet-500/50 transition-all"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
-          {filteredChats.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full gap-3 py-12 text-center">
-              <div className="w-14 h-14 rounded-2xl glass flex items-center justify-center mb-1">
-                <Icon name="MessageSquare" size={24} className="text-white/20" />
-              </div>
-              <p className="text-white/30 text-sm">Чатов пока нет</p>
-              <p className="text-white/20 text-xs">Нажмите + чтобы начать</p>
-            </div>
-          )}
-          {filteredChats.map((chat, i) => (
-            <button
-              key={chat.id}
-              onClick={() => handleSelectChat(chat)}
-              className={`w-full flex items-center gap-3 p-3 rounded-2xl transition-all duration-200 animate-fade-in ${
-                activeChat?.id === chat.id ? "chat-item-active" : "hover:bg-white/5"
-              }`}
-              style={{ animationDelay: `${i * 0.04}s` }}
-            >
-              <div className="relative flex-shrink-0">
-                <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${AVATAR_COLORS[chat.avatar] || "from-violet-500 to-blue-400"} flex items-center justify-center text-sm font-bold text-white shadow-lg`}>
-                  {chat.isGroup ? <Icon name="Users" size={20} className="text-white" /> : chat.avatar}
-                </div>
-                {chat.isOnline && (
-                  <span className="online-dot absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-background" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0 text-left">
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-sm font-semibold text-white/90 truncate">{chat.name}</span>
-                  <span className="text-[11px] text-white/30 flex-shrink-0 ml-2">{chat.time}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-white/40 truncate">{chat.lastMessage}</p>
-                  {unread[chat.id] > 0 && (
-                    <span className="ml-2 flex-shrink-0 min-w-5 h-5 rounded-full bg-gradient-to-r from-violet-500 to-blue-500 flex items-center justify-center text-[10px] font-bold text-white px-1.5">
-                      {unread[chat.id]}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </aside>
-
-      {/* Main area */}
-      <main className="flex-1 flex flex-col relative z-10 min-w-0">
-        {!activeChat ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center animate-fade-in">
-            <div className="w-20 h-20 rounded-3xl glass flex items-center justify-center mb-2">
-              <Icon name="MessageSquareDashed" size={36} className="text-white/15" />
-            </div>
-            <p className="text-white/30 text-lg font-medium">Выберите чат</p>
-            <p className="text-white/20 text-sm">или создайте новый, нажав + в боковой панели</p>
-          </div>
-        ) : (<>
-          {/* Chat header */}
-          <div className="glass border-b border-white/5 px-6 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${AVATAR_COLORS[activeChat.avatar] || "from-violet-500 to-blue-400"} flex items-center justify-center text-sm font-bold text-white shadow-lg`}>
-                  {activeChat.isGroup ? <Icon name="Users" size={18} className="text-white" /> : activeChat.avatar}
-                </div>
-                {activeChat.isOnline && (
-                  <span className="online-dot absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-background" />
-                )}
-              </div>
-              <div>
-                <h2 className="font-semibold text-white/95">{activeChat.name}</h2>
-                <p className="text-xs text-white/40">
-                  {activeChat.isGroup ? `${activeChat.members} участников` : activeChat.isOnline ? "В сети" : "Не в сети"}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {callState !== "idle" && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 mr-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-xs text-emerald-400 font-medium">
-                    {callState === "calling" ? "Вызов..." : formatDuration(callDuration)}
-                  </span>
-                </div>
-              )}
-              <button
-                onClick={() => callState === "idle" ? startCall("audio") : endCall()}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${callState !== "idle" && callType === "audio" ? "bg-red-500/80 hover:bg-red-500" : "glass hover:bg-white/10"}`}
-              >
-                <Icon name={callState !== "idle" && callType === "audio" ? "PhoneOff" : "Phone"} size={16} className="text-white" />
-              </button>
-              <button
-                onClick={() => callState === "idle" ? startCall("video") : endCall()}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${callState !== "idle" && callType === "video" ? "bg-red-500/80 hover:bg-red-500" : "glass hover:bg-white/10"}`}
-              >
-                <Icon name={callState !== "idle" && callType === "video" ? "VideoOff" : "Video"} size={16} className="text-white/60" />
-              </button>
-              <button className="w-9 h-9 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors">
-                <Icon name="MoreVertical" size={16} className="text-white/60" />
-              </button>
-            </div>
-          </div>
-
-          {/* Call overlay */}
-          {callState !== "idle" && (
-            <div className="relative flex-shrink-0 animate-fade-in" style={{ height: callType === "video" ? "60%" : "180px" }}>
-              {callState === "calling" ? (
-                <div className="h-full flex flex-col items-center justify-center gap-4" style={{ background: "linear-gradient(135deg, rgba(124,58,237,0.15), rgba(56,189,248,0.1))" }}>
-                  <div className={`w-20 h-20 rounded-3xl bg-gradient-to-br ${AVATAR_COLORS[activeChat.avatar] || "from-violet-500 to-blue-400"} flex items-center justify-center text-2xl font-bold text-white shadow-2xl`} style={{ animation: "pulse-glow 1.5s infinite" }}>
-                    {activeChat.isGroup ? "👥" : activeChat.avatar}
-                  </div>
-                  <div className="text-center">
-                    <p className="text-white font-semibold text-lg">{activeChat.name}</p>
-                    <p className="text-white/50 text-sm mt-1">{callType === "video" ? "Видеозвонок..." : "Голосовой вызов..."}</p>
-                  </div>
-                  <div className="flex gap-2 mt-2">
-                    {[0, 0.2, 0.4].map((d, i) => (
-                      <span key={i} className="w-2 h-2 rounded-full bg-white/40" style={{ animation: `typing 1.2s ${d}s infinite` }} />
-                    ))}
-                  </div>
-                  <button onClick={endCall} className="mt-2 w-14 h-14 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-lg">
-                    <Icon name="PhoneOff" size={22} className="text-white" />
-                  </button>
-                </div>
-              ) : (
-                <div className="relative h-full">
-                  <iframe src={jitsiUrl} allow="camera; microphone; fullscreen; display-capture; autoplay" className="w-full h-full border-0" title="Звонок" />
-                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-3 z-20">
-                    <button onClick={() => setIsMuted((m) => !m)} className={`w-11 h-11 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-lg ${isMuted ? "bg-red-500" : "bg-white/20 backdrop-blur-md border border-white/20"}`}>
-                      <Icon name={isMuted ? "MicOff" : "Mic"} size={18} className="text-white" />
-                    </button>
-                    {callType === "video" && (
-                      <button onClick={() => setIsCamOff((c) => !c)} className={`w-11 h-11 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-lg ${isCamOff ? "bg-red-500" : "bg-white/20 backdrop-blur-md border border-white/20"}`}>
-                        <Icon name={isCamOff ? "VideoOff" : "Video"} size={18} className="text-white" />
-                      </button>
-                    )}
-                    <button onClick={endCall} className="w-11 h-11 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-all hover:scale-105 active:scale-95 shadow-lg">
-                      <Icon name="PhoneOff" size={18} className="text-white" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-3">
-            {currentMessages.map((msg, i) => (
-              <div key={msg.id} className={`flex animate-fade-in ${msg.isOut ? "justify-end" : "justify-start"}`} style={{ animationDelay: `${i * 0.03}s` }}>
-                {!msg.isOut && activeChat.isGroup && (
-                  <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-violet-500 to-blue-400 flex items-center justify-center text-[10px] font-bold text-white mr-2 flex-shrink-0 mt-auto">
-                    {msg.author?.[0] || "?"}
-                  </div>
-                )}
-                <div className="max-w-[65%]">
-                  {!msg.isOut && activeChat.isGroup && msg.author && (
-                    <p className="text-[11px] text-violet-400 font-medium mb-1 pl-1">{msg.author}</p>
-                  )}
-                  <div className={`px-4 py-2.5 ${msg.isOut ? (activeChat.isGroup ? "msg-bubble-group" : "msg-bubble-out") : "msg-bubble-in"}`}>
-                    <p className="text-sm text-white leading-relaxed">{msg.text}</p>
-                  </div>
-                  <p className={`text-[10px] text-white/25 mt-1 ${msg.isOut ? "text-right pr-1" : "pl-1"}`}>{msg.time}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Input */}
-          <div className="glass border-t border-white/5 px-6 py-4">
-            <div className="flex items-end gap-3">
-              <button className="w-9 h-9 rounded-xl glass flex items-center justify-center hover:bg-white/10 transition-colors flex-shrink-0 mb-0.5">
-                <Icon name="Paperclip" size={16} className="text-white/50" />
-              </button>
-              <div className="flex-1 relative">
-                <input
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="Напишите сообщение..."
-                  className="w-full bg-white/5 border border-white/8 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/25 focus:outline-none focus:border-violet-500/60 transition-all pr-12"
-                />
-                <button className="absolute right-3 top-1/2 -translate-y-1/2 hover:opacity-70 transition-opacity">
-                  <Icon name="Smile" size={18} className="text-white/30" />
-                </button>
-              </div>
-              <button
-                onClick={handleSend}
-                className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all duration-200 ${inputValue.trim() ? "bg-gradient-to-br from-violet-500 to-blue-500 glow-purple hover:scale-105 active:scale-95" : "bg-white/5 border border-white/8"}`}
-              >
-                <Icon name="Send" size={16} className={inputValue.trim() ? "text-white" : "text-white/25"} />
-              </button>
-            </div>
-          </div>
-        </>)}
-      </main>
     </div>
   );
 }
